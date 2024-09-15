@@ -187,7 +187,6 @@ class FooocusLoader:
             ),
         }
 
-
 class FooocusPreKSampler:
     @classmethod
     def INPUT_TYPES(cls):
@@ -218,9 +217,9 @@ class FooocusPreKSampler:
         }
 
     RETURN_TYPES = ("PIPE_LINE", "MODEL", "CLIP", "VAE",
-                    "CONDITIONING", "CONDITIONING")
+                    "CONDITIONING", "CONDITIONING", "IMAGE", "IMAGE", "MASK")
     RETURN_NAMES = ("pipe", "model", "clip", "vae",
-                    "CONDITIONING+", "CONDITIONING-")
+                    "CONDITIONING+", "CONDITIONING-", "fill", "image", "mask")
 
     FUNCTION = "fooocus_preKSampler"
     CATEGORY = "Fooocus"
@@ -536,6 +535,10 @@ class FooocusPreKSampler:
         elif latent is not None:
             initial_latent = latent
 
+        inpaint_pixel_fill = None
+        inpaint_pixel_image = None
+        inpaint_pixel_mask = None
+
         if 'inpaint' in goals:
             if len(outpaint_selections) > 0:
                 inpaint_mask = np.zeros(inpaint_image.shape, dtype=np.uint8)
@@ -689,7 +692,7 @@ class FooocusPreKSampler:
             "vae": pipeline.final_vae,
         }
         del pipe
-        return {"ui": {"value": [new_pipe["seed"]]}, "result": (new_pipe, pipeline.final_unet, pipeline.final_clip, pipeline.final_vae, positive, negative)}
+        return {"ui": {"value": [new_pipe["seed"]]}, "result": (new_pipe, pipeline.final_unet, pipeline.final_clip, pipeline.final_vae, positive, negative, inpaint_pixel_fill, inpaint_pixel_image, inpaint_pixel_mask)}
 
 
 class FooocusKsampler:
@@ -701,22 +704,25 @@ class FooocusKsampler:
                 "image_output": (["Hide", "Preview", "Save", "Hide/Save",], {"default": "Preview"},),
                 "save_prefix": ("STRING", {"default": "ComfyUI"}),
             },
-            "optional": {"model": ("MODEL",), },
+            "optional": {"model": ("MODEL",), "latent": ("LATENT",),},
             "hidden": {
                 "prompt": "PROMPT",
                 "extra_pnginfo": "EXTRA_PNGINFO",
             },
         }
 
-    RETURN_TYPES = ("PIPE_LINE", "IMAGE")
-    RETURN_NAMES = ("pipe", "image")
+    RETURN_TYPES = ("PIPE_LINE", "IMAGE", "IMAGE")
+    RETURN_NAMES = ("pipe", "image", "image_crop")
     OUTPUT_NODE = True
     FUNCTION = "ksampler"
     CATEGORY = "Fooocus"
 
-    def ksampler(self, pipe, image_output, save_prefix, model=None, prompt=None, extra_pnginfo=None):
+    def ksampler(self, pipe, image_output, save_prefix, model=None, latent=None, prompt=None, extra_pnginfo=None):
         if model is not None:
             pipeline.final_unet = model
+        if latent is not None:
+            pipe['latent'] = latent
+        all_imgs0 = []
         all_imgs = []
         all_steps = pipe["steps"] * len(pipe["tasks"])
         pbar = comfy.utils.ProgressBar(all_steps)
@@ -755,7 +761,11 @@ class FooocusKsampler:
                     refiner_swap_method=pipe["refiner_swap_method"],
                     disable_preview=True
                 )
-
+                imgs0 = [np.array(img).astype(np.float32) /
+                        255.0 for img in imgs]
+                imgs0 = [torch.from_numpy(img) for img in imgs0]
+                all_imgs0.extend(imgs0)
+                
                 if inpaint_worker.current_task is not None:
                     imgs = [inpaint_worker.current_task.post_process(
                         x) for x in imgs]
@@ -771,11 +781,13 @@ class FooocusKsampler:
         new_pipe = {
             **pipe,
             "images": all_imgs,
+            "images_crop": all_imgs0,
         }
         del pipe
 
         # Combine the processed images back into a single tensor
         base_image = torch.stack([tensor.squeeze() for tensor in all_imgs])
+        base_image_crop = torch.stack([tensor.squeeze() for tensor in all_imgs0])
 
         if image_output in ("Save", "Hide/Save"):
             saveimage = SaveImage()
@@ -788,9 +800,9 @@ class FooocusKsampler:
                 all_imgs, save_prefix, prompt, extra_pnginfo)
 
         if image_output == "Hide":
-            return {"ui": {"value": list()}, "result": (new_pipe, base_image)}
+            return {"ui": {"value": list()}, "result": (new_pipe, base_image,base_image_crop)}
 
-        results["result"] = new_pipe, base_image
+        results["result"] = new_pipe, base_image, base_image_crop
         return results
 
 
