@@ -1,5 +1,6 @@
 import os
 import sys
+from PIL import Image, ImageFilter, ImageEnhance, ImageOps, ImageDraw, ImageChops, ImageFont
 
 modules_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(modules_path)
@@ -228,6 +229,15 @@ class FooocusLocation:
         
         return (image,mask,)
 
+# Tensor to PIL
+def tensor2pil(image):
+    return Image.fromarray(np.clip(255. * image.cpu().numpy().squeeze(), 0, 255).astype(np.uint8))
+
+# PIL to Tensor
+def pil2tensor(image):
+    return torch.from_numpy(np.array(image).astype(np.float32) / 255.0).unsqueeze(0)
+
+
 class FooocusPreKSampler:
     @classmethod
     def INPUT_TYPES(cls):
@@ -254,18 +264,20 @@ class FooocusPreKSampler:
                 "latent": ("LATENT",),
                 "fooocus_inpaint": ("FOOOCUS_INPAINT",),
                 "fooocus_styles": ("FOOOCUS_STYLES",),
+                "change_image": ("IMAGE",),
+                "change_mask": ("MASK",),
             },
         }
 
     RETURN_TYPES = ("PIPE_LINE", "MODEL", "CLIP", "VAE",
-                    "CONDITIONING", "CONDITIONING", "IMAGE", "IMAGE", "MASK")
+                    "CONDITIONING", "CONDITIONING", "IMAGE", "IMAGE", "MASK","IMAGE")
     RETURN_NAMES = ("pipe", "model", "clip", "vae",
-                    "CONDITIONING+", "CONDITIONING-", "fill", "image", "mask")
+                    "CONDITIONING+", "CONDITIONING-", "fill", "image", "mask", "result_img")
 
     FUNCTION = "fooocus_preKSampler"
     CATEGORY = "Fooocus"
 
-    def fooocus_preKSampler(self, pipe: dict, image_to_latent=None, latent=None, fooocus_inpaint=None, fooocus_styles=None, **kwargs):
+    def fooocus_preKSampler(self, pipe: dict, image_to_latent=None, latent=None, fooocus_inpaint=None, fooocus_styles=None, change_image=None, change_mask=None, **kwargs):
         # 检查pipe非空
         assert pipe is not None, "请先调用 FooocusLoader 进行初始化！"
         execution_start_time = time.perf_counter()
@@ -621,6 +633,23 @@ class FooocusPreKSampler:
             inpaint_pixel_fill = core.numpy_to_pytorch(inpaint_worker.current_task.interested_fill)
             inpaint_pixel_image = core.numpy_to_pytorch(inpaint_worker.current_task.interested_image)
             inpaint_pixel_mask = core.numpy_to_pytorch(inpaint_worker.current_task.interested_mask)
+            
+            if change_image is not None:
+                change_mask = change_mask.reshape((-1, 1, change_mask.shape[-2], change_mask.shape[-1])).movedim(1, -1).expand(-1, -1, -1, 3)
+                img_a = tensor2pil(inpaint_pixel_fill)
+                img_b = tensor2pil(change_image)
+                mask = ImageOps.invert(tensor2pil(change_mask).convert('L'))
+                masked_img = Image.composite(img_a, img_b, mask.resize(img_a.size))
+
+                blend_mask = Image.new(mode="L", size=img_a.size,
+                                    color=(round(1.0 * 255)))
+                blend_mask = ImageOps.invert(blend_mask)
+                img_result = Image.composite(img_a, masked_img, blend_mask)
+
+                del img_a, img_b, blend_mask, mask
+                inpaint_pixel_image = pil2tensor(img_result)
+                new_interested_image = core.pytorch_to_numpy(inpaint_pixel_image)[0]
+                inpaint_worker.current_task.interested_image = new_interested_image
 
             candidate_vae, candidate_vae_swap = pipeline.get_candidate_vae(
                 steps=steps,
@@ -733,7 +762,11 @@ class FooocusPreKSampler:
             "vae": pipeline.final_vae,
         }
         del pipe
-        return {"ui": {"value": [new_pipe["seed"]]}, "result": (new_pipe, pipeline.final_unet, pipeline.final_clip, pipeline.final_vae, positive, negative, inpaint_pixel_fill, inpaint_pixel_image, inpaint_pixel_mask)}
+        
+        result_img = inpaint_worker.current_task.post_process(inpaint_worker.current_task.interested_image)
+        result_img = core.numpy_to_pytorch(result_img)
+        
+        return {"ui": {"value": [new_pipe["seed"]]}, "result": (new_pipe, pipeline.final_unet, pipeline.final_clip, pipeline.final_vae, positive, negative, inpaint_pixel_fill, inpaint_pixel_image, inpaint_pixel_mask,result_img)}
 
 
 class FooocusKsampler:
