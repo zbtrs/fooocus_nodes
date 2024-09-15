@@ -187,6 +187,47 @@ class FooocusLoader:
             ),
         }
 
+class FooocusLocation:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+            },
+        }
+    
+    RETURN_TYPES = ("IMAGE","MASK",)
+    RETURN_NAMES = ("location_image","mask",)
+    
+    FUNCTION = "fooocus_location"
+    CATEGORY = "Fooocus"
+    
+    def fooocus_location(self, image, mask):
+        image = core.pytorch_to_numpy(image)[0]
+        mask = core.pytorch_to_numpy(mask)[0]
+        mask = HWC3(mask)
+        if isinstance(mask,np.ndarray):
+            if mask.ndim == 3:
+                H,W,C = image.shape
+                mask = resample_image(
+                    mask,width=W,height=H
+                )
+                mask = np.mean(mask,axis=2)
+                mask = (mask > 127).astype(np.uint8) * 255
+                mask = np.maximum(mask,mask)
+        image = HWC3(image)
+        temp_inpaintworker = inpaint_worker.InpaintWorker(
+            image=image,
+            mask=mask,
+            use_fill=True,
+            k=0.3,
+        )
+        image = core.numpy_to_pytorch(temp_inpaintworker.interested_image)
+        mask = core.numpy_to_pytorch(temp_inpaintworker.interested_mask)
+        
+        return (image,mask,)
+
 class FooocusPreKSampler:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1519,6 +1560,7 @@ NODE_CLASS_MAPPINGS = {
 
     "Fooocus Loader": FooocusLoader,
     "Fooocus PreKSampler": FooocusPreKSampler,
+    "Fooocus Location": FooocusLocation,
     "Fooocus KSampler": FooocusKsampler,
     "Fooocus Upscale": FooocusUpscale,
     "Fooocus LoraStack": FooocusLoraStack,
