@@ -39,6 +39,7 @@ from log import log_node_info
 import random
 import time
 import copy
+import math
 
 import comfy.samplers
 
@@ -266,6 +267,8 @@ class FooocusPreKSampler:
                 "fooocus_styles": ("FOOOCUS_STYLES",),
                 "change_image": ("IMAGE",),
                 "change_mask": ("MASK",),
+                "mask1": ("MASK",),
+                "mask2": ("MASK",),
             },
         }
 
@@ -277,7 +280,7 @@ class FooocusPreKSampler:
     FUNCTION = "fooocus_preKSampler"
     CATEGORY = "Fooocus"
 
-    def fooocus_preKSampler(self, pipe: dict, image_to_latent=None, latent=None, fooocus_inpaint=None, fooocus_styles=None, change_image=None, change_mask=None, **kwargs):
+    def fooocus_preKSampler(self, pipe: dict, image_to_latent=None, latent=None, fooocus_inpaint=None, fooocus_styles=None, change_image=None, change_mask=None, mask1=None, mask2=None,**kwargs):
         # 检查pipe非空
         assert pipe is not None, "请先调用 FooocusLoader 进行初始化！"
         execution_start_time = time.perf_counter()
@@ -621,11 +624,17 @@ class FooocusPreKSampler:
                 denoising_strength = 1.0
                 inpaint_respective_field = 1.0
 
+            count_mask1 = torch.count_nonzero(mask1)
+            count_mask2 = torch.count_nonzero(mask2)
+            
+            if count_mask2 != 0:
+                scale_by = count_mask1.item() / count_mask2.item()
+
             inpaint_worker.current_task = inpaint_worker.InpaintWorker(
                 image=inpaint_image,
                 mask=inpaint_mask,
                 use_fill=denoising_strength > 0.99,
-                k=inpaint_respective_field
+                k=inpaint_respective_field * math.sqrt(scale_by)
             )
 
             log_node_info('VAE Inpaint encoding ...')
@@ -642,7 +651,7 @@ class FooocusPreKSampler:
                 masked_img = Image.composite(img_a, img_b, mask.resize(img_a.size))
 
                 blend_mask = Image.new(mode="L", size=img_a.size,
-                                    color=(round(1.0 * 255)))
+                                    color=(round(0.5 * 255)))
                 blend_mask = ImageOps.invert(blend_mask)
                 img_result = Image.composite(img_a, masked_img, blend_mask)
 
