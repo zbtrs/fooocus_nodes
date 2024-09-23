@@ -259,6 +259,7 @@ class FooocusPreKSampler:
                 "adm_scaler_end": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.1},),
                 "controlnet_softness": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.01},),
                 "freeu_enabled": ("BOOLEAN", {"default": False},),
+                "blend_percentage": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.1},),
             },
             "optional": {
                 "image_to_latent": ("IMAGE",),
@@ -303,6 +304,7 @@ class FooocusPreKSampler:
         read_wildcards_in_order = False
         sharpness = kwargs.get('sharpness')
         guidance_scale = kwargs.get("cfg")
+        blend_percentage = kwargs.get("blend_percentage")
         base_model_name = pipe["base_model_name"]
         refiner_model_name = pipe["refiner_model_name"]
         refiner_switch = pipe["refiner_switch"]
@@ -651,7 +653,7 @@ class FooocusPreKSampler:
                 masked_img = Image.composite(img_a, img_b, mask.resize(img_a.size))
 
                 blend_mask = Image.new(mode="L", size=img_a.size,
-                                    color=(round(0.5 * 255)))
+                                    color=(round(float(blend_percentage) * 255)))
                 blend_mask = ImageOps.invert(blend_mask)
                 img_result = Image.composite(img_a, masked_img, blend_mask)
 
